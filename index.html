@@ -3089,49 +3089,30 @@
 
         // ==================== 导入导出 ====================
         async function exportData() {
-            // 收集所有数据
             const bills = await getBills();
             const purchases = await getAllPurchases();
             const savings = await getSavings();
             const books = await getBooks();
 
-            const getTx = (stores) => db.transaction(stores, 'readonly');
             const getAll = (store) => new Promise(r => {
-                getTx([store]).objectStore(store).getAll().onsuccess = (e) => r(e.target.result || []);
+                db.transaction([store], 'readonly').objectStore(store).getAll().onsuccess = (e) => r(e.target.result || []);
             });
             const inventory = await getAll('inventory');
             const reminders = await getAll('reminders');
             const settingsRaw = await getAll('settings');
             const accounts = await getAll('accounts');
 
-            // 导出 CSV（仅当前账本账单，方便人工查看）
-            let csv = '\uFEFF类型,金额,分类,备注,日期,计入收支\n';
-            bills.sort((a, b) => b.date.localeCompare(a.date)).forEach(b => {
-                csv += `"${b.type}","${b.amount}","${b.category}","${b.note || ''}","${b.date}","${b.includeBudget !== false ? '是' : '否'}"\n`;
-            });
-            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a'); a.href = url; a.download = `账单_${today()}.csv`;
-            document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
-
-            // 导出完整 JSON（包含所有数据）
             const jsonData = {
                 version: 2,
                 exportDate: today(),
-                books,
-                bills,
-                savings,
-                purchases,
-                inventory,
-                reminders,
-                settings: settingsRaw,
-                accounts
+                books, bills, savings, purchases, inventory, reminders,
+                settings: settingsRaw, accounts
             };
             const jsonBlob = new Blob([JSON.stringify(jsonData)], { type: 'application/json' });
             const jsonUrl = URL.createObjectURL(jsonBlob);
-            const a2 = document.createElement('a'); a2.href = jsonUrl; a2.download = `完整备份_${today()}.json`;
-            document.body.appendChild(a2); a2.click(); document.body.removeChild(a2); URL.revokeObjectURL(jsonUrl);
-            showToast('已导出 CSV + JSON 备份');
+            const a = document.createElement('a'); a.href = jsonUrl; a.download = `完整备份_${today()}.json`;
+            document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(jsonUrl);
+            showToast('备份已导出');
         }
         async function importData(file) {
             const reader = new FileReader();
