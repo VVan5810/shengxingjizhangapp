@@ -3089,9 +3089,22 @@
 
         // ==================== 导入导出 ====================
         async function exportData() {
+            // 收集所有数据
             const bills = await getBills();
             const purchases = await getAllPurchases();
             const savings = await getSavings();
+            const books = await getBooks();
+
+            const getTx = (stores) => db.transaction(stores, 'readonly');
+            const getAll = (store) => new Promise(r => {
+                getTx([store]).objectStore(store).getAll().onsuccess = (e) => r(e.target.result || []);
+            });
+            const inventory = await getAll('inventory');
+            const reminders = await getAll('reminders');
+            const settingsRaw = await getAll('settings');
+            const accounts = await getAll('accounts');
+
+            // 导出 CSV（仅当前账本账单，方便人工查看）
             let csv = '\uFEFF类型,金额,分类,备注,日期,计入收支\n';
             bills.sort((a, b) => b.date.localeCompare(a.date)).forEach(b => {
                 csv += `"${b.type}","${b.amount}","${b.category}","${b.note || ''}","${b.date}","${b.includeBudget !== false ? '是' : '否'}"\n`;
@@ -3101,7 +3114,19 @@
             const a = document.createElement('a'); a.href = url; a.download = `账单_${today()}.csv`;
             document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
 
-            const jsonData = { bills, purchases, savings, exportDate: today() };
+            // 导出完整 JSON（包含所有数据）
+            const jsonData = {
+                version: 2,
+                exportDate: today(),
+                books,
+                bills,
+                savings,
+                purchases,
+                inventory,
+                reminders,
+                settings: settingsRaw,
+                accounts
+            };
             const jsonBlob = new Blob([JSON.stringify(jsonData)], { type: 'application/json' });
             const jsonUrl = URL.createObjectURL(jsonBlob);
             const a2 = document.createElement('a'); a2.href = jsonUrl; a2.download = `完整备份_${today()}.json`;
@@ -3113,21 +3138,27 @@
             reader.onload = async (e) => {
                 try {
                     const data = JSON.parse(e.target.result);
-                    if (data.bills && data.purchases) {
-                        const tx = db.transaction(['bills', 'purchases', 'inventory', 'savings', 'reminders'], 'readwrite');
-                        await new Promise(r => { tx.objectStore('bills').clear().onsuccess = r; });
-                        await new Promise(r => { tx.objectStore('purchases').clear().onsuccess = r; });
-                        if (data.savings) {
-                            const ss = tx.objectStore('savings');
-                            await new Promise(r => { ss.clear().onsuccess = r; });
-                            data.savings.forEach(s => ss.add(s));
-                        }
-                        data.bills.forEach(b => tx.objectStore('bills').add(b));
-                        data.purchases.forEach(p => tx.objectStore('purchases').add(p));
-                        await new Promise(r => { tx.oncomplete = r; });
-                        renderMainPage();
-                        showToast('导入成功');
-                    } else showToast('文件格式不正确');
+                    if (!data.bills) { showToast('文件格式不正确'); return; }
+
+                    const stores = ['books', 'bills', 'purchases', 'inventory', 'savings', 'reminders', 'settings', 'accounts'];
+                    const tx = db.transaction(stores, 'readwrite');
+
+                    // 清空所有
+                    await Promise.all(stores.map(s => new Promise(r => { tx.objectStore(s).clear().onsuccess = r; })));
+
+                    // 写入所有数据
+                    (data.bills || []).forEach(b => tx.objectStore('bills').add(b));
+                    (data.purchases || []).forEach(p => tx.objectStore('purchases').add(p));
+                    (data.savings || []).forEach(s => tx.objectStore('savings').add(s));
+                    (data.books || []).forEach(b => tx.objectStore('books').put(b));
+                    (data.inventory || []).forEach(i => tx.objectStore('inventory').put(i));
+                    (data.reminders || []).forEach(r => tx.objectStore('reminders').put(r));
+                    (data.settings || []).forEach(s => tx.objectStore('settings').put(s));
+                    (data.accounts || []).forEach(a => tx.objectStore('accounts').add(a));
+
+                    await new Promise(r => { tx.oncomplete = r; });
+                    renderMainPage();
+                    showToast('导入成功');
                 } catch (err) { showToast('导入失败：' + err.message); }
             };
             reader.readAsText(file);
