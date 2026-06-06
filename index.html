@@ -2523,14 +2523,14 @@
             }
             $('billList').innerHTML = html || `<div style="text-align:center;color:var(--secondary);padding:40px">${vm === thisMonth() ? '暂无账单记录' : '该月暂无账单'}</div>`;
             $('billList').querySelectorAll('.bill-card').forEach(card => {
-                card.addEventListener('click', () => showBillDetail(parseInt(card.dataset.id)));
+                card.addEventListener('click', () => showBillDetail(card.dataset.id));
             });
         }
 
         // ==================== 账单详情 ====================
         async function showBillDetail(id) {
             const bills = await getBills();
-            const bill = bills.find(b => b.id === id);
+            const bill = bills.find(b => String(b.id) === String(id));
             if (!bill) return;
             const catEmojis = await getCatEmojis();
             $('billDetailCard').innerHTML = `
