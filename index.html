@@ -2054,7 +2054,7 @@
         <div class="consumable-header">
             <span class="back-arrow" id="btnConsumableBack">‹</span>
             <span class="title">消耗品</span>
-            <span></span>
+            <span id="btnConsCatFilter" style="font-size:13px;color:var(--primary);cursor:pointer;padding:4px 8px;border-radius:6px;background:var(--bg);white-space:nowrap">全部 ▾</span>
         </div>
         <div class="consumable-content" id="consumableContent"></div>
     </div>
@@ -2091,6 +2091,7 @@
         let currentAddCat = '';
         let currentAddIncludeBudget = true;
         let currentAddIsConsumable = false;
+        let consCatFilter = '全部';
         let editBillId = null;
 
         function openDB() {
@@ -2464,10 +2465,9 @@
             const vm = getViewMonth();
             const tm = thisMonth();
             const [y, m] = vm.split('-').map(Number);
-            // 标签：当月显示"本月"，其他显示 M月
             const isCurrentMonth = vm === tm;
-            $('bannerMonthLabel').textContent = isCurrentMonth ? '本月' : `${m}月`;
-            // 不能超过当月
+            $('bannerMonthLabel').textContent = isCurrentMonth ? `${y}年本月` : `${y}年${m}月`;
+            $('bannerMonthLabel').style.cssText = 'cursor:pointer;padding:2px 8px;border-radius:6px;user-select:none';
             $('btnMonthNext').disabled = vm >= tm;
         }
 
@@ -2800,8 +2800,15 @@
             const invMap = {}; inventory.forEach(i => invMap[i.itemName] = i);
             const itemMap = new Map();
             purchases.forEach(p => { if (!itemMap.has(p.itemName) || p.date > itemMap.get(p.itemName).date) itemMap.set(p.itemName, p); });
-            const sorted = [...itemMap.values()].sort((a, b) => b.date.localeCompare(a.date));
+            let sorted = [...itemMap.values()].sort((a, b) => b.date.localeCompare(a.date));
             const catEmojis = { '食品': '🍚', '清洁': '🧴', '日用品': '🧻', '其他': '📦' };
+
+            // 更新筛选按钮文字
+            const filterBtn = $('btnConsCatFilter');
+            if (filterBtn) filterBtn.textContent = `${consCatFilter} ▾`;
+
+            // 按分类筛选
+            if (consCatFilter !== '全部') sorted = sorted.filter(p => (p.category || '其他') === consCatFilter);
 
             let html = '<div style="height:4px"></div>';
 
@@ -3070,21 +3077,63 @@
                     const result = await showDialog({
                         title: '编辑购买记录',
                         fields: [
-                            { key: 'note', label: '备注', placeholder: '如：蜜雪冰城', defaultValue: p.note || '' },
-                            { key: 'price', label: '单价（元）', type: 'number', placeholder: fmt(p.price), defaultValue: fmt(p.price) }
+                            { key: 'itemName', label: '物品名称', placeholder: '如：洗衣液', defaultValue: p.itemName || '' },
+                            { key: 'note', label: '购买备注', placeholder: '如：蜜雪冰城茉莉花茶', defaultValue: p.note || '' },
+                            { key: 'category', label: '分类', type: 'select', defaultValue: p.category || '其他', options: ['其他', '食品', '清洁', '日用品'] },
+                            { key: 'price', label: '单价（元）', type: 'number', placeholder: fmt(p.price), defaultValue: fmt(p.price) },
+                            { key: 'spec', label: '每份规格', type: 'number', placeholder: '如 500', defaultValue: p.spec || '' },
+                            { key: 'unit', label: '单位', type: 'select', defaultValue: p.unit || '个', options: ['个', 'kg', 'g', 'L', 'ml', '包', '箱', '瓶', '袋'] },
+                            { key: 'quantity', label: '份数', type: 'number', placeholder: '1', defaultValue: p.quantity || 1 },
+                            { key: 'date', label: '购买日期', type: 'date', defaultValue: p.date || today() },
                         ],
                         confirmText: '保存'
                     });
                     if (!result) return;
                     const newPrice = parseFloat(result.price);
+                    const newSpec = parseFloat(result.spec);
+                    const newQty = parseInt(result.quantity) || 1;
                     const tx2 = db.transaction('purchases', 'readwrite');
-                    tx2.objectStore('purchases').put({ ...p, note: result.note.trim(), price: isNaN(newPrice) ? p.price : newPrice });
+                    tx2.objectStore('purchases').put({
+                        ...p,
+                        itemName: result.itemName.trim() || p.itemName,
+                        note: result.note.trim(),
+                        category: result.category,
+                        price: isNaN(newPrice) ? p.price : newPrice,
+                        spec: isNaN(newSpec) ? p.spec : newSpec,
+                        unit: result.unit,
+                        quantity: newQty,
+                        date: result.date || p.date,
+                    });
                     await new Promise(r => { tx2.oncomplete = r; });
                     showToast('已保存');
                     $('consDetailOverlay').classList.remove('active');
-                    showConsumableDetail(itemName);
+                    showConsumableDetail(result.itemName.trim() || itemName);
                 });
             });
+        }
+
+        // ==================== 年份快速跳转 ====================
+        function showYearPicker(currentYearStr, onSelect) {
+            const currentYear = parseInt(currentYearStr);
+            const thisYear = parseInt(today().slice(0, 4));
+            const startYear = Math.min(currentYear, thisYear) - 4;
+            const years = [];
+            for (let y = startYear; y <= thisYear; y++) years.push(y);
+
+            const backdrop = $('customDialogBackdrop');
+            $('dialogTitle').textContent = '选择年份';
+            $('dialogBody').innerHTML = `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:4px 0">
+                ${years.map(y => `<button data-year="${y}" style="padding:10px 0;border-radius:8px;border:1px solid var(--separator);background:${y === currentYear ? 'var(--primary)' : 'var(--bg)'};color:${y === currentYear ? 'white' : 'var(--text)'};font-size:15px;font-weight:${y === currentYear ? '700' : '400'};cursor:pointer">${y}</button>`).join('')}
+            </div>`;
+            $('dialogBtns').innerHTML = `<button class="dialog-btn dialog-btn-cancel" id="dlgCancel">取消</button>`;
+            backdrop.classList.add('active');
+            $('dialogBody').querySelectorAll('[data-year]').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    backdrop.classList.remove('active');
+                    onSelect(String(btn.dataset.year));
+                });
+            });
+            $('dlgCancel').onclick = () => backdrop.classList.remove('active');
         }
 
         // ==================== 导入导出 ====================
@@ -3210,6 +3259,8 @@
         }
         $('btnSubBack').addEventListener('click', () => {
             $('subPage').classList.remove('active');
+            const t = document.getElementById('statsTitleToggle');
+            if (t) t.remove();
             renderMainPage();
         });
 
@@ -3345,7 +3396,7 @@
             const dayMap = {};
             monthBills.forEach(b => { const d = b.date.slice(8); if (!dayMap[d]) dayMap[d] = 0; if (b.type === 'expense') dayMap[d] += b.amount; });
 
-            let html = `<div style="display:flex;align-items:center;justify-content:center;gap:16px;margin-bottom:12px"><button id="calPrevMonth" style="font-size:20px;cursor:pointer;border:none;background:none;padding:8px;color:var(--primary)">‹</button><span style="font-size:17px;font-weight:700">${year}年${month}月</span><button id="calNextMonth" style="font-size:20px;cursor:pointer;border:none;background:none;padding:8px;color:var(--primary)">›</button></div>`;
+            let html = `<div style="display:flex;align-items:center;justify-content:center;gap:16px;margin-bottom:12px"><button id="calPrevMonth" style="font-size:20px;cursor:pointer;border:none;background:none;padding:8px;color:var(--primary)">‹</button><span id="calMonthLabel" style="font-size:17px;font-weight:700;cursor:pointer;padding:2px 8px;border-radius:6px">${year}年${month}月</span><button id="calNextMonth" style="font-size:20px;cursor:pointer;border:none;background:none;padding:8px;color:var(--primary)">›</button></div>`;
             html += '<div style="display:grid;grid-template-columns:repeat(7,1fr);text-align:center;gap:4px">';
             ['日', '一', '二', '三', '四', '五', '六'].forEach(w => html += `<div style="font-size:11px;color:var(--secondary);padding:4px">${w}</div>`);
             for (let i = 0; i < firstDay; i++) html += '<div></div>';
@@ -3360,6 +3411,12 @@
 
             $('calPrevMonth').addEventListener('click', () => { if (calMonth === 1) { calMonth = 12; calYear--; } else calMonth--; renderCalendarPage(); });
             $('calNextMonth').addEventListener('click', () => { if (calMonth === 12) { calMonth = 1; calYear++; } else calMonth++; renderCalendarPage(); });
+            document.getElementById('calMonthLabel').addEventListener('click', () => {
+                showYearPicker(String(calYear), (newYear) => {
+                    calYear = parseInt(newYear);
+                    renderCalendarPage();
+                });
+            });
             $('subContent').querySelectorAll('.cal-day').forEach(el => {
                 el.addEventListener('click', () => {
                     const day = el.dataset.day;
@@ -3385,26 +3442,38 @@
 
         async function renderStatsPage() {
             const bills = await getBills();
-            // --- 顶部切换 toggle ---
-            const toggleHtml = `
-            <div style="display:flex;background:var(--separator);border-radius:10px;padding:3px;margin-bottom:14px;gap:3px">
-                <button id="statsToggleMonth" style="flex:1;padding:8px;border-radius:8px;border:none;font-size:14px;font-weight:600;cursor:pointer;transition:.2s;background:${statsMode === 'month' ? 'white' : 'transparent'};color:var(--text);box-shadow:${statsMode === 'month' ? '0 1px 3px rgba(0,0,0,.08)' : 'none'}">月统计</button>
-                <button id="statsToggleYear"  style="flex:1;padding:8px;border-radius:8px;border:none;font-size:14px;font-weight:600;cursor:pointer;transition:.2s;background:${statsMode === 'year' ? 'white' : 'transparent'};color:var(--text);box-shadow:${statsMode === 'year' ? '0 1px 3px rgba(0,0,0,.08)' : 'none'}">年统计</button>
-            </div>`;
 
-            let html = toggleHtml;
-
-            if (statsMode === 'month') {
-                html += renderStatsMonthHtml(bills);
-            } else {
-                html += renderStatsYearHtml(bills);
+            // 切换按钮注入标题栏右侧
+            const subHeader = document.querySelector('.sub-header');
+            if (subHeader && !document.getElementById('statsTitleToggle')) {
+                const toggleEl = document.createElement('div');
+                toggleEl.id = 'statsTitleToggle';
+                toggleEl.style.cssText = 'display:flex;background:var(--separator);border-radius:7px;padding:2px;gap:2px;margin-left:auto';
+                toggleEl.innerHTML = `
+                    <button id="statsToggleMonth" style="padding:4px 10px;border-radius:5px;border:none;font-size:12px;font-weight:600;cursor:pointer;transition:.2s">月</button>
+                    <button id="statsToggleYear" style="padding:4px 10px;border-radius:5px;border:none;font-size:12px;font-weight:600;cursor:pointer;transition:.2s">年</button>
+                `;
+                subHeader.appendChild(toggleEl);
+            }
+            // 更新选中状态
+            const mBtn = document.getElementById('statsToggleMonth');
+            const yBtn = document.getElementById('statsToggleYear');
+            if (mBtn && yBtn) {
+                mBtn.style.background = statsMode === 'month' ? 'white' : 'transparent';
+                mBtn.style.color = statsMode === 'month' ? 'var(--text)' : 'var(--secondary)';
+                mBtn.style.boxShadow = statsMode === 'month' ? '0 1px 3px rgba(0,0,0,.08)' : 'none';
+                yBtn.style.background = statsMode === 'year' ? 'white' : 'transparent';
+                yBtn.style.color = statsMode === 'year' ? 'var(--text)' : 'var(--secondary)';
+                yBtn.style.boxShadow = statsMode === 'year' ? '0 1px 3px rgba(0,0,0,.08)' : 'none';
+                mBtn.onclick = () => { statsMode = 'month'; renderStatsPage(); };
+                yBtn.onclick = () => { statsMode = 'year'; renderStatsPage(); };
             }
 
-            $('subContent').innerHTML = html;
+            let html = '';
+            if (statsMode === 'month') html += renderStatsMonthHtml(bills);
+            else html += renderStatsYearHtml(bills);
 
-            // 绑定 toggle
-            $('statsToggleMonth').onclick = () => { statsMode = 'month'; renderStatsPage(); };
-            $('statsToggleYear').onclick = () => { statsMode = 'year'; renderStatsPage(); };
+            $('subContent').innerHTML = html;
 
             if (statsMode === 'month') bindStatsMonthEvents(bills);
             else bindStatsYearEvents(bills);
@@ -3429,7 +3498,7 @@
             // 月份导航
             let html = `<div style="display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:12px">
                 <button id="statsMonthPrev" style="width:30px;height:30px;border-radius:50%;background:var(--bg);border:none;font-size:16px;cursor:pointer;color:var(--text)">‹</button>
-                <span style="font-size:15px;font-weight:700;min-width:80px;text-align:center">${y}年${monthLabel}</span>
+                <span id="statsMonthLabel" style="font-size:15px;font-weight:700;min-width:90px;text-align:center;cursor:pointer;padding:2px 8px;border-radius:6px">${y}年${monthLabel}</span>
                 <button id="statsMonthNext" style="width:30px;height:30px;border-radius:50%;background:var(--bg);border:none;font-size:16px;cursor:pointer;color:var(--text);opacity:${sm >= tm ? '0.3' : '1'}" ${sm >= tm ? 'disabled' : ''}>›</button>
             </div>`;
 
@@ -3449,13 +3518,13 @@
             } else {
                 sorted.forEach(([cat, amt]) => {
                     const pct = totalExp > 0 ? (amt / totalExp * 100).toFixed(1) : 0;
-                    html += `<div style="margin-bottom:8px"><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:3px"><span>${esc(cat)}</span><span>${fmtInt(amt)} (${pct}%)</span></div><div style="height:6px;background:var(--bg);border-radius:3px;overflow:hidden"><div style="height:100%;width:${Math.max(pct, 2)}%;background:var(--primary);border-radius:3px"></div></div></div>`;
+                    html += `<div style="margin-bottom:14px"><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px"><span>${esc(cat)}</span><span>${fmtInt(amt)} (${pct}%)</span></div><div style="height:6px;background:var(--bg);border-radius:3px;overflow:hidden"><div style="height:100%;width:${Math.max(pct, 2)}%;background:var(--primary);border-radius:3px"></div></div></div>`;
                 });
             }
             html += '</div>';
 
             // 每日支出柱状图
-            html += `<div class="card"><div class="card-header">📅 ${monthLabel}每日支出</div><div style="display:flex;align-items:flex-end;gap:2px;height:80px;padding-top:8px">`;
+            html += `<div class="card" style="margin-top:6px"><div class="card-header">📅 ${monthLabel}每日支出</div><div style="display:flex;align-items:flex-end;gap:2px;height:80px;padding-top:8px">`;
             const dayAmts = Array.from({ length: daysInMonth }, (_, i) => {
                 const ds = String(i + 1).padStart(2, '0');
                 return monthBills.filter(b => b.date === `${sm}-${ds}` && b.type === 'expense').reduce((s, b) => s + b.amount, 0);
@@ -3495,6 +3564,19 @@
                     if (nm <= tm) { statsMonth = nm; renderStatsPage(); }
                 };
             }
+            const labelEl = document.getElementById('statsMonthLabel');
+            if (labelEl) {
+                labelEl.addEventListener('click', () => {
+                    const [y, m] = getStatsMonth().split('-');
+                    showYearPicker(y, (newYear) => {
+                        const tm2 = thisMonth();
+                        let newMonth = `${newYear}-${m}`;
+                        if (newMonth > tm2) newMonth = tm2;
+                        statsMonth = newMonth;
+                        renderStatsPage();
+                    });
+                });
+            }
         }
 
         // ---------- 年统计 ----------
@@ -3511,7 +3593,7 @@
             // 年导航
             let html = `<div style="display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:12px">
                 <button id="statsYearPrev" style="width:30px;height:30px;border-radius:50%;background:var(--bg);border:none;font-size:16px;cursor:pointer;color:var(--text)">‹</button>
-                <span style="font-size:15px;font-weight:700;min-width:60px;text-align:center">${sy}年</span>
+                <span id="statsYearLabel" style="font-size:15px;font-weight:700;min-width:60px;text-align:center;cursor:pointer;padding:2px 8px;border-radius:6px">${sy}年</span>
                 <button id="statsYearNext" style="width:30px;height:30px;border-radius:50%;background:var(--bg);border:none;font-size:16px;cursor:pointer;color:var(--text);opacity:${sy >= ty ? '0.3' : '1'}" ${sy >= ty ? 'disabled' : ''}>›</button>
             </div>`;
 
@@ -3591,6 +3673,15 @@
                     if (ny <= ty) { statsYear = ny; renderStatsPage(); }
                 };
             }
+            const labelEl = document.getElementById('statsYearLabel');
+            if (labelEl) {
+                labelEl.addEventListener('click', () => {
+                    showYearPicker(getStatsYear(), (newYear) => {
+                        statsYear = newYear;
+                        renderStatsPage();
+                    });
+                });
+            }
         }
 
         function closeAllSubPages() {
@@ -3648,7 +3739,27 @@
                             renderCatGrid();
                         } else if (tab === 'consumable') {
                             $('consumablePage').classList.add('active');
+                            consCatFilter = '全部';
                             renderConsumablePage();
+                            $('btnConsCatFilter').onclick = async () => {
+                                const allPurchases = await getAllPurchases();
+                                const cats = ['全部', ...new Set(allPurchases.map(p => p.category || '其他'))];
+                                const backdrop = $('customDialogBackdrop');
+                                $('dialogTitle').textContent = '筛选分类';
+                                $('dialogBody').innerHTML = `<div style="display:flex;flex-direction:column;gap:6px">
+                                    ${cats.map(c => `<button data-cat="${c}" style="padding:10px 14px;border-radius:8px;border:1px solid var(--separator);background:${c === consCatFilter ? 'var(--primary)' : 'var(--bg)'};color:${c === consCatFilter ? 'white' : 'var(--text)'};font-size:14px;text-align:left;cursor:pointer">${c}</button>`).join('')}
+                                </div>`;
+                                $('dialogBtns').innerHTML = `<button class="dialog-btn dialog-btn-cancel" id="dlgCancel">取消</button>`;
+                                backdrop.classList.add('active');
+                                $('dialogBody').querySelectorAll('[data-cat]').forEach(btn => {
+                                    btn.addEventListener('click', () => {
+                                        backdrop.classList.remove('active');
+                                        consCatFilter = btn.dataset.cat;
+                                        renderConsumablePage();
+                                    });
+                                });
+                                $('dlgCancel').onclick = () => backdrop.classList.remove('active');
+                            };
                         } else if (tab === 'profile') {
                             $('billList').style.display = 'none';
                             const ps = $('profileSection');
@@ -3661,11 +3772,24 @@
             // ... 后面的事件绑定保持不变 ...
 
             $('btnSavingBack').addEventListener('click', () => $('savingPage').classList.remove('active'));
-            $('btnConsumableBack').addEventListener('click', () => $('consumablePage').classList.remove('active'));
+            $('btnConsumableBack').addEventListener('click', () => {
+                consCatFilter = '全部';
+                $('consumablePage').classList.remove('active');
+            });
 
             // 月份导航
             $('btnMonthPrev').addEventListener('click', () => shiftMonth(-1));
             $('btnMonthNext').addEventListener('click', () => { if (!$('btnMonthNext').disabled) shiftMonth(1); });
+            $('bannerMonthLabel').addEventListener('click', () => {
+                const [y, m] = getViewMonth().split('-');
+                showYearPicker(y, (newYear) => {
+                    const tm = thisMonth();
+                    let newMonth = `${newYear}-${m}`;
+                    if (newMonth > tm) newMonth = tm;
+                    currentViewMonth = newMonth;
+                    renderMainPage();
+                });
+            });
             document.querySelectorAll('.add-type-toggle button').forEach(btn => {
                 btn.addEventListener('click', () => {
                     document.querySelectorAll('.add-type-toggle button').forEach(b => b.classList.remove('active'));
@@ -3952,10 +4076,18 @@
                 let bodyHtml = '';
                 if (message) bodyHtml += `<div class="dialog-msg">${message}</div>`;
                 fields.forEach(f => {
-                    bodyHtml += `<div class="dialog-field">
-                        <div class="dialog-label">${f.label || ''}</div>
-                        <input class="dialog-input" id="dlgField_${f.key}" type="${f.type || 'text'}" placeholder="${f.placeholder || ''}" value="${f.defaultValue || ''}" inputmode="${f.type === 'number' ? 'decimal' : 'text'}">
-                    </div>`;
+                    if (f.type === 'select') {
+                        const opts = f.options.map(o => `<option value="${o}" ${o === f.defaultValue ? 'selected' : ''}>${o}</option>`).join('');
+                        bodyHtml += `<div class="dialog-field">
+                            <div class="dialog-label">${f.label || ''}</div>
+                            <select class="dialog-input" id="dlgField_${f.key}" style="width:100%">${opts}</select>
+                        </div>`;
+                    } else {
+                        bodyHtml += `<div class="dialog-field">
+                            <div class="dialog-label">${f.label || ''}</div>
+                            <input class="dialog-input" id="dlgField_${f.key}" type="${f.type || 'text'}" placeholder="${f.placeholder || ''}" value="${f.defaultValue || ''}" inputmode="${f.type === 'number' ? 'decimal' : 'text'}">
+                        </div>`;
+                    }
                 });
                 bodyEl.innerHTML = bodyHtml;
 
